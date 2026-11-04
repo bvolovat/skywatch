@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SkyWatch</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 32rem; margin: 4rem auto; padding: 0 1rem; color: #1f2933; }
+    h1 { margin-bottom: .25rem; }
+    p.sub { color: #616e7c; margin-top: 0; }
+    form { display: flex; gap: .5rem; margin: 1.5rem 0; }
+    input { flex: 1; padding: .6rem; font-size: 1rem; border: 1px solid #cbd2d9; border-radius: 6px; }
+    button { padding: .6rem 1.1rem; font-size: 1rem; border: 0; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; }
+    .card { border: 1px solid #e4e7eb; border-radius: 8px; padding: 1.25rem; }
+    .temp { font-size: 2.5rem; font-weight: 600; }
+    .error { color: #b91c1c; }
+    .meta { color: #616e7c; font-size: .9rem; }
+  </style>
+</head>
+<body>
+  <h1>SkyWatch</h1>
+  <p class="sub">Current weather for any city</p>
+
+  <form method="post">
+    <input name="city" placeholder="e.g. Tel Aviv" value="{{ city }}" autofocus>
+    <button type="submit">Check</button>
+  </form>
+
+  {% if error %}
+    <p class="error">{{ error }}</p>
+  {% endif %}
+
+  {% if result %}
+    <div class="card">
+      <div><strong>{{ result.city }}</strong>{% if result.country %}, {{ result.country }}{% endif %}</div>
+      <div class="temp">{{ result.temperature_c }}&deg;C</div>
+      <div>{{ result.conditions }}</div>
+      <div class="meta">Wind {{ result.wind_speed_kmh }} km/h &middot; observed {{ result.observed_at }}</div>
+    </div>
+  {% endif %}
+</body>
+</html>

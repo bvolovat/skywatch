@@ -1,0 +1,12 @@
+---
+# Pinned K3s release. Changing this and re-running the playbook upgrades the cluster.
+k3s_version: v1.36.6+k3s1
+
+# The install script is pinned to the same tag, so the installer itself is reproducible.
+k3s_install_script_url: "https://raw.githubusercontent.com/k3s-io/k3s/{{ k3s_version }}/install.sh"
+
+k3s_server_ip: "{{ hostvars[groups['k3s_server'][0]]['ansible_host'] }}"
+k3s_server_url: "https://{{ k3s_server_ip }}:6443"
+
+# Where the host-side kubeconfig is written (repo root, git-ignored).
+k3s_local_kubeconfig: "{{ playbook_dir }}/../../kubeconfig"

@@ -1,0 +1,8 @@
+# Managed by Ansible (roles/k3s_server). Read by K3s on startup.
+node-ip: {{ ansible_host }}
+tls-san:
+  - {{ ansible_host }}
+write-kubeconfig-mode: "0600"
+# Keep application workloads off the control plane.
+node-taint:
+  - "node-role.kubernetes.io/control-plane:NoSchedule"

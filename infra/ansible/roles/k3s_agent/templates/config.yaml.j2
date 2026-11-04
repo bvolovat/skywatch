@@ -1,0 +1,7 @@
+# Managed by Ansible (roles/k3s_agent). Read by K3s on startup.
+server: {{ k3s_server_url }}
+token: {{ hostvars[groups['k3s_server'][0]]['k3s_server_node_token'] }}
+node-ip: {{ ansible_host }}
+# No node-role.kubernetes.io/* labels here: the NodeRestriction admission plugin forbids a kubelet
+# from setting them on itself, and the agent would exit at startup. The worker role label is
+# applied from the control plane instead (see tasks/main.yml).

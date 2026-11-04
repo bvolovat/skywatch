@@ -1,0 +1,51 @@
+---
+- name: Read the installed K3s version (if any)
+  ansible.builtin.command: /usr/local/bin/k3s --version
+  register: k3s_agent_installed
+  changed_when: false
+  failed_when: false
+
+- name: Decide whether K3s needs to be installed or upgraded
+  ansible.builtin.set_fact:
+    k3s_agent_needs_install: "{{ k3s_agent_installed.rc != 0 or k3s_version not in k3s_agent_installed.stdout }}"
+
+- name: Write the K3s agent config
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/rancher/k3s/config.yaml
+    owner: root
+    group: root
+    mode: "0600"
+  diff: false # the file contains the join token
+  notify: Restart k3s-agent
+
+- name: Install K3s agent (only when missing or on a different version)
+  ansible.builtin.command: /usr/local/bin/k3s-install.sh agent
+  environment:
+    INSTALL_K3S_VERSION: "{{ k3s_version }}"
+  when: k3s_agent_needs_install | bool
+  changed_when: true
+
+- name: Apply a pending config change before continuing
+  ansible.builtin.meta: flush_handlers
+
+- name: Ensure the K3s agent service is enabled and running
+  ansible.builtin.systemd_service:
+    name: k3s-agent
+    state: started
+    enabled: true
+
+- name: Wait for this node to register with the API server
+  ansible.builtin.command: k3s kubectl get node {{ inventory_hostname }}
+  delegate_to: "{{ groups['k3s_server'][0] }}"
+  register: k3s_agent_node
+  retries: 30
+  delay: 5
+  until: k3s_agent_node.rc == 0
+  changed_when: false
+
+- name: Label the node as a worker (from the control plane; a kubelet may not set node-role labels on itself)
+  ansible.builtin.command: k3s kubectl label node {{ inventory_hostname }} node-role.kubernetes.io/worker=true --overwrite
+  delegate_to: "{{ groups['k3s_server'][0] }}"
+  register: k3s_agent_label
+  changed_when: "'not labeled' not in k3s_agent_label.stdout"
