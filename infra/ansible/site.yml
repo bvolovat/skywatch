@@ -17,6 +17,12 @@
   roles:
     - k3s_agent
 
+- name: Install ArgoCD and register the SkyWatch Application
+  hosts: k3s_server
+  become: true
+  roles:
+    - argocd
+
 - name: Verify the cluster from the host
   hosts: localhost
   connection: local
@@ -38,3 +44,22 @@
     - name: Print nodes
       ansible.builtin.debug:
         msg: "{{ nodes.stdout_lines }}"
+
+    - name: Wait for ArgoCD to sync SkyWatch and report it Healthy
+      ansible.builtin.command: >-
+        kubectl --kubeconfig {{ hostvars[groups['k3s_server'][0]]['k3s_local_kubeconfig'] }}
+        -n argocd wait application/skywatch
+        --for=jsonpath='{.status.health.status}'=Healthy --timeout=10s
+      # Retried: right after the play, the Application may not exist yet (K3s applies it within seconds).
+      register: skywatch_health
+      retries: 30
+      delay: 10
+      until: skywatch_health.rc == 0
+      changed_when: false
+
+    - name: How to reach ArgoCD and the app
+      ansible.builtin.debug:
+        msg:
+          - "ArgoCD UI: http://{{ hostvars[groups['k3s_agents'][0]]['ansible_host'] }}:30081  (user: admin)"
+          - "Admin password: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
+          - "SkyWatch:  http://{{ hostvars[groups['k3s_agents'][0]]['ansible_host'] }}:30080"

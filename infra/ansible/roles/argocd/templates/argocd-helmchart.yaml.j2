@@ -1,0 +1,30 @@
+# Managed by Ansible (roles/argocd). K3s's built-in Helm controller installs and upgrades this chart.
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: argocd
+  namespace: kube-system
+spec:
+  repo: https://argoproj.github.io/argo-helm
+  chart: argo-cd
+  version: {{ argocd_chart_version }}
+  targetNamespace: {{ argocd_namespace }}
+  createNamespace: true
+  valuesContent: |-
+    # Not needed here; saves memory on the small workers.
+    dex:
+      enabled: false
+    notifications:
+      enabled: false
+    configs:
+      params:
+        # Serve the UI over plain HTTP on the NodePort (local lab, no TLS termination in front).
+        server.insecure: true
+      cm:
+        timeout.reconciliation: {{ argocd_reconciliation_timeout }}
+        timeout.reconciliation.jitter: {{ argocd_reconciliation_jitter }}
+    server:
+      service:
+        type: NodePort
+        nodePortHttp: {{ argocd_node_port_http }}
+        nodePortHttps: {{ argocd_node_port_https }}

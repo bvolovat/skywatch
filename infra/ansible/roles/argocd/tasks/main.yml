@@ -1,0 +1,35 @@
+---
+# Both steps drop a manifest into the directory K3s auto-applies, so they are idempotent by
+# construction: the file only changes (and K3s only re-applies) when its content changes.
+
+- name: Install ArgoCD through the K3s Helm controller
+  ansible.builtin.template:
+    src: argocd-helmchart.yaml.j2
+    dest: "{{ argocd_k3s_manifests_dir }}/argocd.yaml"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Wait for the ArgoCD Application CRD
+  ansible.builtin.command: k3s kubectl wait --for=condition=Established crd/applications.argoproj.io --timeout=10s
+  register: argocd_crd
+  retries: 60
+  delay: 10
+  until: argocd_crd.rc == 0
+  changed_when: false
+
+- name: Wait for the ArgoCD server to be available
+  ansible.builtin.command: k3s kubectl -n {{ argocd_namespace }} rollout status deploy/argocd-server --timeout=30s
+  register: argocd_server
+  retries: 20
+  delay: 15
+  until: argocd_server.rc == 0
+  changed_when: false
+
+- name: Register the SkyWatch Application (from argocd/application.yaml in the repo)
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../argocd/application.yaml"
+    dest: "{{ argocd_k3s_manifests_dir }}/skywatch-application.yaml"
+    owner: root
+    group: root
+    mode: "0600"

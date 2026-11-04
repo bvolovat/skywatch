@@ -1,0 +1,12 @@
+---
+# Pinned argo-cd Helm chart (chart 10.11.7 = Argo CD v3.5.7).
+argocd_chart_version: 10.11.7
+argocd_namespace: argocd
+# Not 30080: that NodePort belongs to the SkyWatch frontend.
+argocd_node_port_http: 30081
+argocd_node_port_https: 30444
+# How often ArgoCD polls Git. GitHub webhooks cannot reach a laptop, so polling is the trigger.
+argocd_reconciliation_timeout: 60s
+argocd_reconciliation_jitter: 10s
+# Directory K3s watches and applies automatically (its built-in manifest and Helm controllers).
+argocd_k3s_manifests_dir: /var/lib/rancher/k3s/server/manifests

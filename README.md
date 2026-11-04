@@ -12,6 +12,7 @@ apps/backend/    # HTTP API: GET /api/weather?city=..., /healthz, /readyz
 apps/frontend/   # Flask web page with a city form, calls the backend
 charts/skywatch/ # Helm chart for the whole app
 infra/           # Multipass VM scripts + Ansible roles for K3s
+argocd/          # ArgoCD Application for the chart
 .github/         # CI pipeline
 ```
 
@@ -23,7 +24,7 @@ Prerequisites on the host (macOS): `brew install --cask multipass` and `brew ins
 # 1. Create 3 Ubuntu VMs (1 control plane + 2 workers) and generate the Ansible inventory
 ./infra/multipass/create-vms.sh
 
-# 2. Install K3s (pinned version) on the control plane and join the workers
+# 2. Install K3s (pinned version), join the workers, install ArgoCD and register the app
 cd infra/ansible && ansible-playbook site.yml && cd -
 
 # 3. Use the cluster from the host
@@ -90,6 +91,41 @@ Design notes:
 
 One-time setup after the first successful run: in GitHub, open each package (`skywatch-backend`, `skywatch-frontend`)
 → Package settings → Change visibility → **Public**, so the cluster can pull without credentials.
+
+## GitOps with ArgoCD
+
+`ansible-playbook site.yml` also installs ArgoCD and registers the app, so there is no manual `kubectl`/`helm` step:
+
+- **Install**: the `argocd` role drops a `HelmChart` manifest into `/var/lib/rancher/k3s/server/manifests/` on the control
+  plane, and K3s's built-in Helm controller installs the pinned `argo-cd` chart (`10.11.7`, Argo CD v3.5.7). Re-running
+  the playbook only rewrites the file if its content changed, so the step is idempotent.
+- **Application**: `argocd/application.yaml` (copied into the same directory) deploys `charts/skywatch` from `main` into
+  the `skywatch` namespace with `automated` sync, `prune: true` and `selfHeal: true`.
+- **Trigger**: GitHub webhooks cannot reach a laptop, so ArgoCD polls Git every 60s (+ up to 10s jitter) instead of the
+  default 120s (+60s).
+- **Access**: UI at `http://<worker-ip>:30081` (user `admin`), served over plain HTTP since this is a local lab.
+
+```bash
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
+kubectl -n argocd get applications
+```
+
+### The flow: from `git push` to running pods
+
+```
+git push (code change)
+  -> GitHub Actions: lint + test -> build amd64/arm64 images -> push ghcr.io/...:<sha>
+  -> bot commit: values.yaml image tags = <sha>  [skip ci]
+  -> ArgoCD polls main, sees the new tag, renders the chart, rolling update of the pods
+```
+
+## Secrets
+
+No plaintext secret is committed:
+- The K3s join token is read at run time and kept in memory by Ansible (`no_log`).
+- The host `kubeconfig` (cluster admin credentials) and the generated inventory are git-ignored.
+- The ArgoCD admin password is generated inside the cluster (`argocd-initial-admin-secret`) and never leaves it.
+- Images are public on GHCR, so no registry pull secret is needed.
 
 ## Running the services locally (without Kubernetes)
 
