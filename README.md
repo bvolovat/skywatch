@@ -122,5 +122,5 @@ open http://localhost:8080
 ```bash
 pip install ruff pytest flask requests
 ruff check . && ruff format --check .
-(cd apps/backend && pytest -q) && (cd apps/frontend && pytest -q)
+(cd apps/backend && python -m pytest -q) && (cd apps/frontend && python -m pytest -q)
 ```

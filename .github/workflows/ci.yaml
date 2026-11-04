@@ -41,8 +41,8 @@ jobs:
 
       - name: Unit tests
         run: |
-          (cd apps/backend && pytest -q)
-          (cd apps/frontend && pytest -q)
+          (cd apps/backend && python -m pytest -q)
+          (cd apps/frontend && python -m pytest -q)
 
       - name: Hadolint (backend)
         uses: hadolint/hadolint-action@v3.5.0
