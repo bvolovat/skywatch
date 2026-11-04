@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "skywatch.backendName" . }}
+  labels:
+    {{- include "skywatch.labels" (dict "ctx" . "component" "backend") | nindent 4 }}
+data:
+  PORT: {{ .Values.backend.port | quote }}
+  {{- range $key, $value := .Values.backend.config }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "skywatch.frontendName" . }}
+  labels:
+    {{- include "skywatch.labels" (dict "ctx" . "component" "frontend") | nindent 4 }}
+data:
+  PORT: {{ .Values.frontend.port | quote }}
+  # In-cluster DNS name of the backend Service.
+  BACKEND_URL: {{ printf "http://%s:%v" (include "skywatch.backendName" .) .Values.backend.port | quote }}
+  {{- range $key, $value := .Values.frontend.config }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}

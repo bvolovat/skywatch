@@ -10,6 +10,9 @@ deployed to a local K3s cluster through GitHub Actions and ArgoCD.
 ```
 apps/backend/    # HTTP API: GET /api/weather?city=..., /healthz, /readyz
 apps/frontend/   # Flask web page with a city form, calls the backend
+charts/skywatch/ # Helm chart for the whole app
+infra/           # Multipass VM scripts + Ansible roles for K3s
+.github/         # CI pipeline
 ```
 
 ## Cluster provisioning (Path A: Multipass + Ansible + K3s)
@@ -47,6 +50,46 @@ Design notes:
   the repo. The generated `kubeconfig` and inventory are git-ignored.
 
 Tear down: `./infra/multipass/destroy-vms.sh`
+
+## Helm chart (`charts/skywatch`)
+
+One chart deploys the whole app:
+
+| Resource | Details |
+|----------|---------|
+| `skywatch-frontend` Deployment + Service | 1 replica, `NodePort 30080`, reachable from the host at `http://<node-ip>:30080` |
+| `skywatch-backend` Deployment + Service | 2 replicas, internal `ClusterIP` on port 8000, spread across the two workers |
+| `skywatch-backend` PodDisruptionBudget | `minAvailable: 1`, so a node drain never takes both backend pods down |
+| ConfigMaps (one per service) | All runtime config from `values.yaml`; `BACKEND_URL` is built from the backend Service name |
+
+Design notes:
+- **Config, not images**: every setting comes from `values.yaml` through a ConfigMap (`envFrom`). A `checksum/config`
+  annotation rolls the pods when the ConfigMap changes, since env vars are only read at start.
+- **Probes**: backend liveness `/healthz`, readiness `/readyz` (which deliberately does not call Open-Meteo, so an
+  external outage does not remove every pod from the Service); frontend uses `/healthz`.
+- **Resources**: requests and limits on every container.
+- **Hardening**: non-root UID 10001, read-only root filesystem (with an `emptyDir` on `/tmp` for gunicorn),
+  all capabilities dropped, `RuntimeDefault` seccomp.
+- **Image tags** are full commit SHAs written by CI; `pullPolicy: IfNotPresent` is safe because SHA tags are immutable.
+
+## CI (`.github/workflows/ci.yaml`)
+
+| Job | Runs on | What it does |
+|-----|---------|--------------|
+| `lint-test` | push + PR | `ruff` lint/format, `pytest` for both services, `hadolint` for both Dockerfiles, `helm lint` |
+| `build` (matrix: backend, frontend) | push + PR | Multi-arch build (`linux/amd64` + `linux/arm64` via QEMU); on `main` pushes to `ghcr.io/<owner>/skywatch-<service>:<commit-sha>` |
+| `update-tags` | push to `main` only | Writes the new SHA into `charts/skywatch/values.yaml` with `yq` and pushes a bot commit |
+
+- **No trigger loop**: the tag commit is pushed with `GITHUB_TOKEN`, and GitHub never starts workflow runs from
+  `GITHUB_TOKEN` pushes. The commit message also carries `[skip ci]` as a second guard.
+- **Caching**: pip cache in `setup-python`; Docker layer cache in the GitHub Actions cache (`type=gha`), one scope per
+  service.
+- **Races**: `concurrency` cancels a superseded run on the same branch, and the bump job rebases on `main` before pushing.
+- **arm64**: the Multipass VMs on Apple Silicon are arm64 while GitHub's default runners are amd64, so images are built
+  for both architectures.
+
+One-time setup after the first successful run: in GitHub, open each package (`skywatch-backend`, `skywatch-frontend`)
+→ Package settings → Change visibility → **Public**, so the cluster can pull without credentials.
 
 ## Running the services locally (without Kubernetes)
 

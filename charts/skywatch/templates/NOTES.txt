@@ -1,0 +1,9 @@
+SkyWatch is deployed.
+
+Frontend: {{ .Values.frontend.service.type }} service "{{ include "skywatch.frontendName" . }}"
+{{- if eq .Values.frontend.service.type "NodePort" }}
+Open it from the host at http://<any-node-ip>:{{ .Values.frontend.service.nodePort }}
+  kubectl get nodes -o wide   # node IPs
+{{- end }}
+
+Backend: {{ .Values.backend.replicas }} replicas behind ClusterIP service "{{ include "skywatch.backendName" . }}:{{ .Values.backend.port }}"

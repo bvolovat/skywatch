@@ -1,0 +1,136 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# One run per branch at a time; a newer push supersedes an older in-flight run
+# (the newer commit contains the older changes anyway).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  lint-test:
+    name: Lint and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: apps/*/requirements.txt
+
+      - name: Install tools
+        run: pip install ruff pytest -r apps/backend/requirements.txt
+
+      - name: Ruff (lint + format check)
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Unit tests
+        run: |
+          (cd apps/backend && pytest -q)
+          (cd apps/frontend && pytest -q)
+
+      - name: Hadolint (backend)
+        uses: hadolint/hadolint-action@v3.5.0
+        with:
+          dockerfile: apps/backend/Dockerfile
+
+      - name: Hadolint (frontend)
+        uses: hadolint/hadolint-action@v3.5.0
+        with:
+          dockerfile: apps/frontend/Dockerfile
+
+      - uses: azure/setup-helm@v5
+
+      - name: Helm lint
+        run: helm lint charts/skywatch --strict
+
+  build:
+    name: Build ${{ matrix.service }}
+    needs: lint-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        service: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Image name
+        id: image
+        # GHCR repository names must be lowercase.
+        run: echo "name=${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}/skywatch-${{ matrix.service }}" >> "$GITHUB_OUTPUT"
+
+      # QEMU lets the amd64 runner also build arm64 (the K3s VMs on Apple Silicon are arm64).
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (and push on main)
+        uses: docker/build-push-action@v7
+        with:
+          context: apps/${{ matrix.service }}
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.image.outputs.name }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          # Layer cache in the GitHub Actions cache, one scope per service.
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  update-tags:
+    name: Bump image tags in Helm values
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set image tags to this commit
+        run: |
+          yq -i '.backend.image.tag = strenv(GITHUB_SHA) | .frontend.image.tag = strenv(GITHUB_SHA)' \
+            charts/skywatch/values.yaml
+          git diff --stat
+
+      # No trigger loop, twice over:
+      #  1. Pushes made with GITHUB_TOKEN never start new workflow runs (GitHub rule).
+      #  2. "[skip ci]" in the message skips CI even if the push used another token.
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add charts/skywatch/values.yaml
+          if git diff --cached --quiet; then
+            echo "Tags already up to date"; exit 0
+          fi
+          git commit -m "ci: bump image tags to ${GITHUB_SHA::7} [skip ci]"
+          # Another commit may have landed on main while we built.
+          git pull --rebase origin main
+          git push origin HEAD:main

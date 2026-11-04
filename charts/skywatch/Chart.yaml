@@ -1,0 +1,7 @@
+apiVersion: v2
+name: skywatch
+description: SkyWatch weather app - Flask frontend and backend API
+type: application
+version: 0.1.0
+# The app images are versioned by commit SHA in values.yaml (updated by CI), not by appVersion.
+appVersion: "0.1.0"

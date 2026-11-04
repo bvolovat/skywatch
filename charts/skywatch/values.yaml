@@ -1,0 +1,64 @@
+# Default values for the SkyWatch chart.
+# `backend.image.tag` and `frontend.image.tag` are rewritten by CI on every push to main.
+backend:
+  image:
+    repository: ghcr.io/bvolovat/skywatch-backend
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  replicas: 2
+  port: 8000
+  config:
+    GEOCODING_URL: "https://geocoding-api.open-meteo.com/v1/search"
+    FORECAST_URL: "https://api.open-meteo.com/v1/forecast"
+    HTTP_TIMEOUT_SECONDS: "5"
+    LOG_LEVEL: "INFO"
+    GUNICORN_WORKERS: "2"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  # Keep at least one backend pod up during voluntary disruptions (node drain, upgrades).
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+frontend:
+  image:
+    repository: ghcr.io/bvolovat/skywatch-frontend
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  replicas: 1
+  port: 8080
+  service:
+    type: NodePort
+    nodePort: 30080
+  config:
+    HTTP_TIMEOUT_SECONDS: "10"
+    LOG_LEVEL: "INFO"
+    GUNICORN_WORKERS: "2"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+probes:
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 2
+  failureThreshold: 3
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
