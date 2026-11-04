@@ -3,7 +3,7 @@
 backend:
   image:
     repository: ghcr.io/bvolovat/skywatch-backend
-    tag: "696b1b0a258f7a940f32ddcb89863af31323c2ca"
+    tag: "cf17cf01af4c0e4f28cff93a30ba5516cc4bb28a"
     pullPolicy: IfNotPresent
   replicas: 2
   port: 8000
@@ -27,7 +27,7 @@ backend:
 frontend:
   image:
     repository: ghcr.io/bvolovat/skywatch-frontend
-    tag: "696b1b0a258f7a940f32ddcb89863af31323c2ca"
+    tag: "cf17cf01af4c0e4f28cff93a30ba5516cc4bb28a"
     pullPolicy: IfNotPresent
   replicas: 1
   port: 8080
