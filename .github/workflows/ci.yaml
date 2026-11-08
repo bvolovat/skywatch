@@ -19,9 +19,9 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  lint-test:
-    name: Lint and test
-    runs-on: ubuntu-latest
+  test-app:
+    name: App lint and tests
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
@@ -32,7 +32,7 @@ jobs:
           cache-dependency-path: apps/*/requirements.txt
 
       - name: Install tools
-        run: pip install ruff pytest -r apps/backend/requirements.txt
+        run: pip install ruff pytest -r apps/backend/requirements.txt -r apps/frontend/requirements.txt
 
       - name: Ruff (lint + format check)
         run: |
@@ -54,15 +54,42 @@ jobs:
         with:
           dockerfile: apps/frontend/Dockerfile
 
+  lint-infra:
+    name: Infra lint
+    runs-on: ubuntu-24.04
+    env:
+      KUBECONFORM_VERSION: v0.8.0
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
       - uses: azure/setup-helm@v5
 
       - name: Helm lint
         run: helm lint charts/skywatch --strict
 
+      - name: Validate rendered manifests (kubeconform)
+        run: |
+          curl -sSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | tar xz kubeconform
+          helm template skywatch charts/skywatch | ./kubeconform -strict -summary -
+
+      - name: Ansible lint
+        working-directory: infra/ansible
+        run: |
+          pip install ansible-lint
+          ansible-lint --offline
+
+      - name: ShellCheck
+        run: shellcheck infra/multipass/*.sh
+
   build:
     name: Build ${{ matrix.service }}
-    needs: lint-test
-    runs-on: ubuntu-latest
+    needs: [test-app, lint-infra]
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -107,7 +134,7 @@ jobs:
     name: Bump image tags in Helm values
     needs: build
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:

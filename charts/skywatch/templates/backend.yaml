@@ -1,34 +1,37 @@
-{{- $name := include "skywatch.backendName" . -}}
-{{- $sel := dict "ctx" . "component" "backend" -}}
+# Backend API: a Deployment with 2 replicas and an internal (ClusterIP) Service.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ $name }}
+  name: {{ .Release.Name }}-backend
   labels:
-    {{- include "skywatch.labels" $sel | nindent 4 }}
+    app.kubernetes.io/name: backend
+    app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
   replicas: {{ .Values.backend.replicas }}
   selector:
     matchLabels:
-      {{- include "skywatch.selectorLabels" $sel | nindent 6 }}
+      app.kubernetes.io/name: backend
+      app.kubernetes.io/instance: {{ .Release.Name }}
   template:
     metadata:
       labels:
-        {{- include "skywatch.labels" $sel | nindent 8 }}
+        app.kubernetes.io/name: backend
+        app.kubernetes.io/instance: {{ .Release.Name }}
       annotations:
-        # Roll the pods when the ConfigMap content changes (env vars are only read at start).
+        # Changes when the ConfigMaps change, which restarts the pods (env vars are only read at start).
         checksum/config: {{ include (print $.Template.BasePath "/configmaps.yaml") . | sha256sum }}
     spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      # Put the two replicas on different workers so losing one node does not take the API down.
+      # Put the two replicas on different workers, so losing one node does not take the API down.
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
           whenUnsatisfiable: ScheduleAnyway
           labelSelector:
             matchLabels:
-              {{- include "skywatch.selectorLabels" $sel | nindent 14 }}
+              app.kubernetes.io/name: backend
+              app.kubernetes.io/instance: {{ .Release.Name }}
       containers:
         - name: backend
           image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
@@ -38,7 +41,7 @@ spec:
               containerPort: {{ .Values.backend.port }}
           envFrom:
             - configMapRef:
-                name: {{ $name }}
+                name: {{ .Release.Name }}-backend
           livenessProbe:
             httpGet:
               path: /healthz
@@ -54,7 +57,7 @@ spec:
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           volumeMounts:
-            # gunicorn needs a writable temp dir; the root filesystem is read-only.
+            # gunicorn needs a writable /tmp; the rest of the filesystem is read-only.
             - name: tmp
               mountPath: /tmp
       volumes:
@@ -64,28 +67,16 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ $name }}
+  name: {{ .Release.Name }}-backend
   labels:
-    {{- include "skywatch.labels" $sel | nindent 4 }}
+    app.kubernetes.io/name: backend
+    app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
   type: ClusterIP
   selector:
-    {{- include "skywatch.selectorLabels" $sel | nindent 4 }}
+    app.kubernetes.io/name: backend
+    app.kubernetes.io/instance: {{ .Release.Name }}
   ports:
     - name: http
       port: {{ .Values.backend.port }}
       targetPort: http
-{{- if .Values.backend.podDisruptionBudget.enabled }}
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: {{ $name }}
-  labels:
-    {{- include "skywatch.labels" $sel | nindent 4 }}
-spec:
-  minAvailable: {{ .Values.backend.podDisruptionBudget.minAvailable }}
-  selector:
-    matchLabels:
-      {{- include "skywatch.selectorLabels" $sel | nindent 6 }}
-{{- end }}

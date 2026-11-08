@@ -1,9 +1,8 @@
+# One ConfigMap per service. Each key becomes an environment variable in the container (envFrom).
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "skywatch.backendName" . }}
-  labels:
-    {{- include "skywatch.labels" (dict "ctx" . "component" "backend") | nindent 4 }}
+  name: {{ .Release.Name }}-backend
 data:
   PORT: {{ .Values.backend.port | quote }}
   {{- range $key, $value := .Values.backend.config }}
@@ -13,13 +12,11 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "skywatch.frontendName" . }}
-  labels:
-    {{- include "skywatch.labels" (dict "ctx" . "component" "frontend") | nindent 4 }}
+  name: {{ .Release.Name }}-frontend
 data:
   PORT: {{ .Values.frontend.port | quote }}
-  # In-cluster DNS name of the backend Service.
-  BACKEND_URL: {{ printf "http://%s:%v" (include "skywatch.backendName" .) .Values.backend.port | quote }}
+  # The backend Service's in-cluster DNS name, e.g. http://skywatch-backend:8000
+  BACKEND_URL: "http://{{ .Release.Name }}-backend:{{ .Values.backend.port }}"
   {{- range $key, $value := .Values.frontend.config }}
   {{ $key }}: {{ $value | quote }}
   {{- end }}

@@ -1,21 +1,24 @@
-{{- $name := include "skywatch.frontendName" . -}}
-{{- $sel := dict "ctx" . "component" "frontend" -}}
+# Frontend web page: a Deployment and a NodePort Service, so the browser on the Mac can reach it.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ $name }}
+  name: {{ .Release.Name }}-frontend
   labels:
-    {{- include "skywatch.labels" $sel | nindent 4 }}
+    app.kubernetes.io/name: frontend
+    app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
   replicas: {{ .Values.frontend.replicas }}
   selector:
     matchLabels:
-      {{- include "skywatch.selectorLabels" $sel | nindent 6 }}
+      app.kubernetes.io/name: frontend
+      app.kubernetes.io/instance: {{ .Release.Name }}
   template:
     metadata:
       labels:
-        {{- include "skywatch.labels" $sel | nindent 8 }}
+        app.kubernetes.io/name: frontend
+        app.kubernetes.io/instance: {{ .Release.Name }}
       annotations:
+        # Changes when the ConfigMaps change, which restarts the pods (env vars are only read at start).
         checksum/config: {{ include (print $.Template.BasePath "/configmaps.yaml") . | sha256sum }}
     spec:
       securityContext:
@@ -29,7 +32,7 @@ spec:
               containerPort: {{ .Values.frontend.port }}
           envFrom:
             - configMapRef:
-                name: {{ $name }}
+                name: {{ .Release.Name }}-frontend
           livenessProbe:
             httpGet:
               path: /healthz
@@ -45,6 +48,7 @@ spec:
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           volumeMounts:
+            # gunicorn needs a writable /tmp; the rest of the filesystem is read-only.
             - name: tmp
               mountPath: /tmp
       volumes:
@@ -54,17 +58,17 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ $name }}
+  name: {{ .Release.Name }}-frontend
   labels:
-    {{- include "skywatch.labels" $sel | nindent 4 }}
+    app.kubernetes.io/name: frontend
+    app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
-  type: {{ .Values.frontend.service.type }}
+  type: NodePort
   selector:
-    {{- include "skywatch.selectorLabels" $sel | nindent 4 }}
+    app.kubernetes.io/name: frontend
+    app.kubernetes.io/instance: {{ .Release.Name }}
   ports:
     - name: http
       port: {{ .Values.frontend.port }}
       targetPort: http
-      {{- if and (eq .Values.frontend.service.type "NodePort") .Values.frontend.service.nodePort }}
-      nodePort: {{ .Values.frontend.service.nodePort }}
-      {{- end }}
+      nodePort: {{ .Values.frontend.nodePort }}

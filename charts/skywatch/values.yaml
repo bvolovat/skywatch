@@ -20,10 +20,6 @@ backend:
     limits:
       cpu: 500m
       memory: 256Mi
-  # Keep at least one backend pod up during voluntary disruptions (node drain, upgrades).
-  podDisruptionBudget:
-    enabled: true
-    minAvailable: 1
 frontend:
   image:
     repository: ghcr.io/bvolovat/skywatch-frontend
@@ -31,9 +27,7 @@ frontend:
     pullPolicy: IfNotPresent
   replicas: 1
   port: 8080
-  service:
-    type: NodePort
-    nodePort: 30080
+  nodePort: 30080 # the browser opens http://<worker-ip>:30080
   config:
     HTTP_TIMEOUT_SECONDS: "10"
     LOG_LEVEL: "INFO"

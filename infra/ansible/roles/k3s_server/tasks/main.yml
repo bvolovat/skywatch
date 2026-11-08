@@ -5,10 +5,6 @@
   changed_when: false
   failed_when: false
 
-- name: Decide whether K3s needs to be installed or upgraded
-  ansible.builtin.set_fact:
-    k3s_server_needs_install: "{{ k3s_server_installed.rc != 0 or k3s_version not in k3s_server_installed.stdout }}"
-
 - name: Write the K3s server config
   ansible.builtin.template:
     src: config.yaml.j2
@@ -22,7 +18,8 @@
   ansible.builtin.command: /usr/local/bin/k3s-install.sh server
   environment:
     INSTALL_K3S_VERSION: "{{ k3s_version }}"
-  when: k3s_server_needs_install | bool
+  # Only when K3s is missing or on another version: this is what makes re-runs safe.
+  when: k3s_server_installed.rc != 0 or k3s_version not in k3s_server_installed.stdout
   changed_when: true
 
 - name: Apply a pending config change before continuing
