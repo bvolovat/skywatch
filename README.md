@@ -12,7 +12,7 @@ manual `kubectl` or `helm` command.
 - [Design decisions](#design-decisions)
 - [Problems I ran into and how I solved them](#problems-i-ran-into-and-how-i-solved-them)
 - [What I would improve with more time](#what-i-would-improve-with-more-time)
-- [Reference](#reference): repository layout, configuration, lint and tests, local run
+- [Reference](#reference): repository layout, lint and tests
 
 ---
 
@@ -79,16 +79,14 @@ Tested with: macOS on Apple Silicon (M1 Pro, 16 GB), Ansible core 2.21, kubectl 
 Resources: about 7 GB of free RAM for the VMs (close Docker Desktop while the cluster runs), about 40 GB of disk,
 and a GitHub account.
 
-### 2. If you fork this repo
+### 2. Get the repo
 
-The repo owner appears in two files. Replace `bvolovat` with your GitHub user:
+```bash
+git clone https://github.com/bvolovat/skywatch.git
+cd skywatch
+```
 
-- `charts/skywatch/values.yaml`: `backend.image.repository` and `frontend.image.repository`
-- `argocd/application.yaml`: `spec.source.repoURL`
-
-CI derives the image names from the repository owner automatically. Push once to `main` so CI builds and publishes the
-images, then make both GHCR packages public (GitHub → your profile → Packages → `skywatch-backend` /
-`skywatch-frontend` → Package settings → Change visibility → Public), so the cluster can pull them without credentials.
+That is all you need to run it: the images on GHCR are public and the ArgoCD Application tracks this repo.
 
 ### 3. Create the VMs and the cluster
 
@@ -127,7 +125,10 @@ git pull --rebase       # CI adds a tag-bump commit to main after every push, so
 git commit -am "..." && git push
 ```
 
-About 3 minutes later the new version is live: CI (~1.5 min), then ArgoCD's next poll (≤70 s), then a rolling update.
+About 3 minutes later the new version is live: CI (about 1-1.5 min), then ArgoCD's next poll (≤70 s), then a rolling update.
+
+Pushing needs your own fork: replace `bvolovat` in `charts/skywatch/values.yaml` and `argocd/application.yaml`, enable
+Actions on the fork, and after the first CI run make the two GHCR packages public.
 
 ### 6. Stop or tear down
 
@@ -140,15 +141,29 @@ multipass stop --all                 # keep everything, free the RAM; `multipass
 
 ## Proof of the GitOps flow
 
-A one-line change to the page subtitle, pushed to `main`, rolled out with no manual step:
+Two real changes reached the cluster with no manual `kubectl` or `helm` step. Every sync in ArgoCD's history says
+"Initiated by: automated sync policy".
 
-1. Commit `cf17cf0` ("Frontend: update subtitle") is pushed.
-2. CI builds and pushes `ghcr.io/bvolovat/skywatch-*:cf17cf0...`, then the bot commits `55a75c4`
-   ("ci: bump image tags to cf17cf0 [skip ci]"). No second CI run is started.
-3. ArgoCD detects the new tag on its next poll and rolls the pods.
-4. The page shows the new subtitle.
+**A code change** (page subtitle): commit `cf17cf0` was pushed, CI built and pushed new images, the bot committed
+`55a75c4` ("ci: bump image tags to cf17cf0 [skip ci]") and ArgoCD rolled the pods. The new subtitle is visible in the
+screenshot of the app below.
 
-![GitOps rollout](docs/gitops-rollout.gif)
+**A config change** (memory requests sized from `kubectl top`), timeline from ArgoCD's history:
+
+| Time | Event |
+|------|-------|
+| 13:09:01 | `2c6a8e5` pushed: `memory: 96Mi` in `values.yaml` |
+| 13:09:27 | ArgoCD synced it, 26 s later. A values change needs no new image, so ArgoCD did not wait for CI |
+| 13:10:06 | CI finished (1m 5s) and the bot pushed `84a1b56` with the new image tags. No second CI run started |
+| 13:10:27 | ArgoCD synced the new images, 21 s later |
+
+CI run for `2c6a8e5`: the two lint jobs run in parallel, then the matrix build, then the tag bump.
+
+![CI run](docs/ci-run.png)
+
+ArgoCD history (newest first): the bot's tag bump, the config change, and the previous deployment.
+
+![ArgoCD history](docs/argocd-history.png)
 
 | ArgoCD: app Synced and Healthy | The app in the cluster |
 |---|---|
@@ -164,78 +179,45 @@ Self-heal: `kubectl scale deploy skywatch-backend -n skywatch --replicas=5` is r
 
 ## Design decisions
 
-### Application (`apps/`)
-- **Minimal Flask services, configured only through environment variables** (URLs, timeouts, ports, log level, gunicorn
-  workers). No address is hard-coded in the code.
-- **Liveness vs readiness**: `/healthz` (process is up) and `/readyz` (ready for traffic). Readiness deliberately does
-  *not* call Open-Meteo: an outage of the external API must not pull every backend pod out of the Service.
-- **Clear error mapping**: 400 for a missing city, 404 for an unknown city, 502 when Open-Meteo is unreachable; the
-  frontend shows a friendly message instead of failing.
-- **Images**: multi-stage build (dependencies installed in a venv, only the venv and the code copied to the final image),
-  `python:3.12-slim`, non-root UID 10001, gunicorn instead of the Flask dev server, `.dockerignore` keeps tests out.
-  About 50 MB each.
+### Application
+- **Configured only through environment variables**, so the same image runs anywhere. In the cluster the values come
+  from `values.yaml` through ConfigMaps.
+- **Separate liveness (`/healthz`) and readiness (`/readyz`).** Readiness does not call Open-Meteo: if the external API
+  is down, the backend pods stay in the Service and return a clear 502, instead of all of them dropping out.
+- **Small, non-root images**: multi-stage build on `python:3.12-slim`, gunicorn, UID 10001, about 50 MB each.
 
-### Provisioning (`infra/`)
-- **Multipass + cloud-init**: the script injects a dedicated SSH key and writes the Ansible inventory from the live VM IPs.
-- **Pinned K3s**: `k3s_version` in `infra/ansible/group_vars/k3s_cluster.yml`. The install script is fetched from the same
-  git tag, so the installer itself is pinned. Bumping the version and re-running the playbook performs an upgrade.
-- **Idempotent by design**: each role reads `k3s --version` first and only runs the installer when K3s is missing or on
-  another version. Configuration lives in templated `/etc/rancher/k3s/config.yaml` files; a change triggers a restart
-  through a handler. ArgoCD is installed by dropping manifests into the directory K3s watches, so the task only reports
-  a change when the content changes.
-- **No workloads on the control plane**: the server carries `node-role.kubernetes.io/control-plane:NoSchedule`; workers
-  get the `node-role.kubernetes.io/worker=true` label from the control plane.
+### Provisioning
+- **Pinned K3s version** (`k3s_version` in `group_vars`), and the install script is fetched from the same version tag.
+- **Idempotent playbook**: K3s is installed only when it is missing or on another version, and restarted only when its
+  config changes. A second run reports `changed=0`.
+- **No workloads on the control plane**: it carries a `NoSchedule` taint.
 
-### Helm chart (`charts/skywatch`)
-- **One small chart for the app**: three templates. `frontend.yaml` (Deployment + NodePort Service), `backend.yaml`
-  (Deployment with 2 replicas + ClusterIP Service) and `configmaps.yaml` (one ConfigMap per service). Labels are written
-  out in each template, with no helper functions, so every file reads top to bottom.
-- **Config from values, not images**: everything comes from `values.yaml` through ConfigMaps (`envFrom`). `BACKEND_URL` is
-  built from the backend Service name. A `checksum/config` annotation rolls the pods when a ConfigMap changes.
-- **Resilience**: `topologySpreadConstraints` put the two backend replicas on different workers.
-- **Resources sized from measurement**: `kubectl top pods` showed ~60Mi memory and 1-4m CPU per pod at idle, so
-  memory requests are 96Mi (real usage plus headroom), CPU requests 50m, limits 500m CPU / 256Mi memory.
-- **Probes and resources** on every container; **hardening**: non-root, read-only root filesystem (with an `emptyDir` on
-  `/tmp` for gunicorn), all capabilities dropped, `RuntimeDefault` seccomp.
-- **Immutable tags**: images are tagged with the full commit SHA, so `pullPolicy: IfNotPresent` is safe and every
-  deployed version maps to one commit.
+### Helm chart
+- **One chart, three templates**: frontend (Deployment + NodePort Service), backend (Deployment with 2 replicas +
+  ClusterIP Service) and the ConfigMaps.
+- **Config in values, not in images**. A config change rolls the pods automatically (`checksum/config` annotation).
+- **Probes and requests/limits on every container**, with memory requests sized from `kubectl top`. The two backend
+  replicas run on different workers.
+- **Hardened pods**: non-root, read-only root filesystem, all capabilities dropped.
 
-### CI (`.github/workflows/ci.yaml`)
+### CI
+- **Stages**: app lint + tests (ruff, pytest, hadolint) and infra lint (helm lint, kubeconform, ansible-lint,
+  shellcheck) run in parallel, then both images are built, then a bot commit writes the
+  new tags into `values.yaml`. Images are tagged with the commit SHA and pushed only from `main`.
+- **Multi-arch** (`amd64` + `arm64`): the VMs on Apple Silicon are arm64, GitHub's runners are amd64.
+- **No trigger loop**: the bot pushes with `GITHUB_TOKEN`, which never starts a new run; `[skip ci]` is a second guard.
+- **Caching**: pip and Docker layers in the GitHub Actions cache. A newer push cancels an older run on the same branch.
 
-| Job | Runs on | What it does |
-|-----|---------|--------------|
-| `test-app` | push + PR | `ruff` lint/format, `pytest` (9 unit tests), `hadolint` |
-| `lint-infra` | push + PR | `helm lint`, `kubeconform` (rendered chart), `ansible-lint`, `shellcheck` |
-| `build` (backend, frontend) | push + PR, after both | `linux/amd64` + `linux/arm64` images; pushed to GHCR as `:<commit-sha>` on `main` only |
-| `update-tags` | push to `main` | writes the SHA into `values.yaml` with `yq` and pushes a bot commit |
-
-- **No trigger loop**: the bot commit is pushed with `GITHUB_TOKEN`, and GitHub never starts workflow runs from
-  `GITHUB_TOKEN` pushes. `[skip ci]` in the message is a second guard.
-- **Caching**: pip cache in `setup-python`; Docker layer cache in the GitHub Actions cache (`type=gha`), one scope per service.
-- **Races**: `concurrency` cancels a superseded run on the same branch; the bump job rebases on `main` before pushing.
-- **arm64**: the VMs on Apple Silicon are arm64 while GitHub's default runners are amd64, so images are multi-arch.
-- **Pinned runners** (`ubuntu-24.04`) so the build environment does not change under the pipeline.
-
-### GitOps (`argocd/`)
-- ArgoCD is installed by K3s's built-in Helm controller from a pinned `argo-cd` chart (`10.11.7`, Argo CD v3.5.7), with
-  dex and notifications disabled to save memory on the small workers.
-- The `skywatch` Application deploys `charts/skywatch` from `main` with `automated` sync, `prune: true`, `selfHeal: true`,
-  `CreateNamespace=true` and retry with backoff.
-- GitHub webhooks cannot reach a laptop, so ArgoCD polls every 60 s (+ up to 10 s jitter) instead of the default 120 s (+60 s).
-- The ArgoCD UI is on NodePort `30081` (its chart default, `30080`, is taken by the frontend), over plain HTTP since this
-  is a local lab.
+### GitOps
+- **ArgoCD** is installed by Ansible from a pinned chart. The `skywatch` Application syncs `charts/skywatch` from `main`
+  automatically, with prune and self-heal.
+- **Polling every 60 s** instead of a webhook, because GitHub cannot reach a laptop.
 
 ### Secrets
-No plaintext secret is committed, and none has to be:
-- The K3s join token is read from the control plane at run time and kept in Ansible's memory (`no_log`).
-- The host `kubeconfig` (cluster-admin credentials) and the generated inventory are git-ignored.
-- The ArgoCD admin password is generated inside the cluster (`argocd-initial-admin-secret`) and never leaves it.
-- Images are public on GHCR, so no registry pull secret is needed; CI authenticates with the short-lived `GITHUB_TOKEN`.
-
-If the app needed a real secret (an API key, a Grafana admin password), I would add **Sealed Secrets**: the controller
-runs in the cluster, `kubeseal` encrypts the Secret with the controller's public key, and only the encrypted
-`SealedSecret` is committed and synced by ArgoCD. External Secrets Operator with a cloud secret manager is the choice once
-a cloud provider is involved.
+No plaintext secret is in Git: the K3s join token stays in Ansible's memory, the kubeconfig is git-ignored, the ArgoCD
+admin password is generated inside the cluster, and CI uses the short-lived `GITHUB_TOKEN`. For a real secret (for
+example a Grafana password) I would use **Sealed Secrets**: only the encrypted version is committed, and only the
+controller in the cluster can decrypt it.
 
 ---
 
@@ -243,14 +225,9 @@ a cloud provider is involved.
 
 | # | Problem | Cause | Fix |
 |---|---------|-------|-----|
-| 1 | `create-vms.sh` exited silently on the first run, creating nothing | `multipass info` exits non-zero for a VM that does not exist yet; with `set -euo pipefail` that aborted the script (stderr was sent to `/dev/null`) | `\|\| true` in the state lookup, so "no VM" reads as an empty state |
-| 2 | Ansible: `Too many authentication failures` | ssh offered every key in the local ssh-agent before the dedicated one, and the VM's `MaxAuthTries` cut the connection | `ansible_ssh_common_args='-o IdentitiesOnly=yes'` in the generated inventory |
-| 3 | K3s agents failed to start on both workers | the agent config set `node-label: node-role.kubernetes.io/worker=true`; the NodeRestriction admission plugin forbids a kubelet from giving itself `node-role` labels | removed the label from the agent config; the role applies it from the control plane with `kubectl label` (idempotent) |
-| 4 | CI: `ModuleNotFoundError: No module named 'app'` | locally I ran `python -m pytest`, which puts the current directory on `sys.path`; CI ran plain `pytest`, which does not | CI runs `python -m pytest`, the same command as locally |
-| 5 | Images would not run on the cluster's architecture | the Multipass VMs on Apple Silicon are arm64, GitHub's runners are amd64 | multi-arch build (`linux/amd64,linux/arm64`) with buildx + QEMU; the pure-Python dependencies keep emulation cheap |
-| 6 | ArgoCD's NodePort collided with the frontend | the argo-cd chart defaults to NodePort 30080 | ArgoCD on 30081/30444 |
-| 7 | `git push` rejected (`fetch first`) after a CI run | the CI bot commits the new image tags to `main` after every push, so the local branch is one commit behind | `git pull --rebase` before pushing (documented in "Ship a change") |
-| 8 | Noisy bot diffs | `yq -i` drops blank lines, so the first bump rewrote the whole `values.yaml` | removed blank lines from `values.yaml`; every bot commit now changes exactly the two tag lines |
+| 1 | K3s agents failed to start on both workers | the agent config set `node-label: node-role.kubernetes.io/worker=true`; the NodeRestriction admission plugin forbids a kubelet from giving itself `node-role` labels | removed the label from the agent config; the role applies it from the control plane with `kubectl label` (idempotent) |
+| 2 | Images would not run on the cluster's architecture | the Multipass VMs on Apple Silicon are arm64, GitHub's runners are amd64 | multi-arch build (`linux/amd64,linux/arm64`) with buildx + QEMU; the pure-Python dependencies keep emulation cheap |
+| 3 | `git push` rejected (`fetch first`) after a CI run | the CI bot commits the new image tags to `main` after every push, so the local branch is one commit behind | `git pull --rebase` before pushing (documented in "Ship a change") |
 
 ---
 
@@ -262,16 +239,8 @@ a cloud provider is involved.
   frontend before publishing. Today the end-to-end check is the playbook's "Healthy" gate plus a manual browser test.
 - **Supply chain**: vulnerability scan (Trivy) as a gate, SBOM generation, and image signing with cosign verified at
   admission.
-- **Separate config repo** (or ArgoCD Image Updater) so the bot does not write to the code branch, and branch
-  protection on `main` with a narrow exception for the bot.
-- **Secrets**: Sealed Secrets as described above, once there is a real secret.
-- **Ingress + TLS** (Traefik ships with K3s) instead of NodePorts, and a webhook into ArgoCD instead of polling.
-- **Renovate** to keep pinned versions (K3s, argo-cd chart, base image, actions, Python deps) up to date.
 - **Observability**: kube-prometheus-stack, request count/latency metrics from both services, and a Grafana dashboard
   managed by ArgoCD (app-of-apps).
-- **Backend robustness**: retries with backoff and a short cache for Open-Meteo responses; an HPA and a
-  PodDisruptionBudget on the backend.
-- **Terraform** for the VMs, so provisioning has state and a plan step.
 
 ---
 
@@ -290,21 +259,8 @@ argocd/                ArgoCD Application for the chart
 docs/                  screenshots for this README
 ```
 
-### Configuration
-
-| Service  | Variable               | Default                                          |
-|----------|------------------------|--------------------------------------------------|
-| backend  | `PORT`                 | `8000`                                           |
-| backend  | `GEOCODING_URL`        | `https://geocoding-api.open-meteo.com/v1/search` |
-| backend  | `FORECAST_URL`         | `https://api.open-meteo.com/v1/forecast`         |
-| backend  | `HTTP_TIMEOUT_SECONDS` | `5`                                              |
-| frontend | `PORT`                 | `8080`                                           |
-| frontend | `BACKEND_URL`          | `http://localhost:8000` (in-cluster: set by the chart) |
-| frontend | `HTTP_TIMEOUT_SECONDS` | `10`                                             |
-| both     | `LOG_LEVEL`            | `INFO`                                           |
-| both     | `GUNICORN_WORKERS`     | `2`                                              |
-
-In the cluster all of these come from `charts/skywatch/values.yaml`.
+All runtime configuration (URLs, timeouts, ports, log level, gunicorn workers) is in
+`charts/skywatch/values.yaml` and reaches the pods as environment variables through ConfigMaps.
 
 ### Lint and tests (the same checks CI runs)
 
@@ -318,15 +274,3 @@ shellcheck infra/multipass/*.sh
 ```
 
 Unit tests mock Open-Meteo and the backend, so they need no network and also cover the failure paths.
-
-### Running the services locally (without Kubernetes)
-
-```bash
-docker build -t skywatch-backend:dev  apps/backend
-docker build -t skywatch-frontend:dev apps/frontend
-docker network create skywatch
-docker run -d --rm --name backend  --network skywatch skywatch-backend:dev
-docker run -d --rm --name frontend --network skywatch -p 8080:8080 \
-  -e BACKEND_URL=http://backend:8000 skywatch-frontend:dev
-open http://localhost:8080
-```
