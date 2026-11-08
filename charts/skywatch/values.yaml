@@ -16,7 +16,7 @@ backend:
   resources:
     requests:
       cpu: 50m
-      memory: 64Mi
+      memory: 96Mi # measured ~60Mi at idle (kubectl top), plus headroom
     limits:
       cpu: 500m
       memory: 256Mi
@@ -35,7 +35,7 @@ frontend:
   resources:
     requests:
       cpu: 50m
-      memory: 64Mi
+      memory: 96Mi # measured ~60Mi at idle (kubectl top), plus headroom
     limits:
       cpu: 500m
       memory: 256Mi

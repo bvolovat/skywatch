@@ -193,6 +193,8 @@ Self-heal: `kubectl scale deploy skywatch-backend -n skywatch --replicas=5` is r
 - **Config from values, not images**: everything comes from `values.yaml` through ConfigMaps (`envFrom`). `BACKEND_URL` is
   built from the backend Service name. A `checksum/config` annotation rolls the pods when a ConfigMap changes.
 - **Resilience**: `topologySpreadConstraints` put the two backend replicas on different workers.
+- **Resources sized from measurement**: `kubectl top pods` showed ~60Mi memory and 1-4m CPU per pod at idle, so
+  memory requests are 96Mi (real usage plus headroom), CPU requests 50m, limits 500m CPU / 256Mi memory.
 - **Probes and resources** on every container; **hardening**: non-root, read-only root filesystem (with an `emptyDir` on
   `/tmp` for gunicorn), all capabilities dropped, `RuntimeDefault` seccomp.
 - **Immutable tags**: images are tagged with the full commit SHA, so `pullPolicy: IfNotPresent` is safe and every
